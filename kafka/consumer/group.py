@@ -5,19 +5,17 @@ import logging
 import socket
 import time
 
-from kafka.errors import KafkaConfigurationError, UnsupportedVersionError
-
-from kafka.vendor import six
-
 from kafka.client_async import KafkaClient, selectors
 from kafka.consumer.fetcher import Fetcher
 from kafka.consumer.subscription_state import SubscriptionState
-from kafka.coordinator.consumer import ConsumerCoordinator
 from kafka.coordinator.assignors.range import RangePartitionAssignor
 from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
+from kafka.coordinator.consumer import ConsumerCoordinator
+from kafka.errors import KafkaConfigurationError, UnsupportedVersionError
 from kafka.metrics import MetricConfig, Metrics
 from kafka.protocol.offset import OffsetResetStrategy
 from kafka.structs import TopicPartition
+from kafka.vendor import six
 from kafka.version import __version__
 
 log = logging.getLogger(__name__)
@@ -235,6 +233,8 @@ class KafkaConsumer(six.Iterator):
             Default: None
         sasl_kerberos_service_name (str): Service name to include in GSSAPI
             sasl mechanism handshake. Default: 'kafka'
+        dual_commit (bool): Commit on kafka-storage too even if api version
+            is < (0, 8, 2)
 
     Note:
         Configuration parameters are described in more detail at
@@ -293,7 +293,8 @@ class KafkaConsumer(six.Iterator):
         'sasl_mechanism': None,
         'sasl_plain_username': None,
         'sasl_plain_password': None,
-        'sasl_kerberos_service_name': 'kafka'
+        'sasl_kerberos_service_name': 'kafka',
+        'dual_commit': False,
     }
     DEFAULT_SESSION_TIMEOUT_MS_0_9 = 30000
 

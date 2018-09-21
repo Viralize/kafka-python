@@ -5,20 +5,18 @@ import copy
 import logging
 import time
 
-from kafka.vendor import six
-
-from kafka.coordinator.base import BaseCoordinator, Generation
+from kafka import errors as Errors
 from kafka.coordinator.assignors.range import RangePartitionAssignor
 from kafka.coordinator.assignors.roundrobin import RoundRobinPartitionAssignor
+from kafka.coordinator.base import BaseCoordinator, Generation
 from kafka.coordinator.protocol import ConsumerProtocol
-from kafka import errors as Errors
 from kafka.future import Future
 from kafka.metrics import AnonMeasurable
 from kafka.metrics.stats import Avg, Count, Max, Rate
 from kafka.protocol.commit import OffsetCommitRequest, OffsetFetchRequest
 from kafka.structs import OffsetAndMetadata, TopicPartition
 from kafka.util import WeakMethod
-
+from kafka.vendor import six
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +35,8 @@ class ConsumerCoordinator(BaseCoordinator):
         'retry_backoff_ms': 100,
         'api_version': (0, 10, 1),
         'exclude_internal_topics': True,
-        'metric_group_prefix': 'consumer'
+        'metric_group_prefix': 'consumer',
+        'dual_commit': True,
     }
 
     def __init__(self, client, subscription, metrics, **configs):
@@ -584,18 +583,9 @@ class ConsumerCoordinator(BaseCoordinator):
                 ) for topic, partitions in six.iteritems(offset_data)]
             )
         elif self.config['api_version'] >= (0, 8, 2):
-            request = OffsetCommitRequest[1](
-                self.group_id, -1, '',
-                [(
-                    topic, [(
-                        partition,
-                        offset.offset,
-                        -1,
-                        offset.metadata
-                    ) for partition, offset in six.iteritems(partitions)]
-                ) for topic, partitions in six.iteritems(offset_data)]
-            )
+            request = self._offset_commit_request_v1(offset_data)
         elif self.config['api_version'] >= (0, 8, 1):
+            request = self._offset_commit_request_v0(offset_data)
             request = OffsetCommitRequest[0](
                 self.group_id,
                 [(
@@ -614,7 +604,52 @@ class ConsumerCoordinator(BaseCoordinator):
         _f = self._client.send(node_id, request)
         _f.add_callback(self._handle_offset_commit_response, offsets, future, time.time())
         _f.add_errback(self._failed_request, node_id, request, future)
-        return future
+
+        if self.config['dual_commit']:
+            if self.config['api_version'] == (0, 8, 1):
+                log.debug("Sending dual-commit to kafka-storage")
+                dual_commit_request = self._offset_commit_request_v1(
+                    offset_data)
+            else:               # api_version >= 0.8.2
+                log.debug("Sending dual-commit to zookeepr-storage")
+                dual_commit_request = self._offset_commit_request_v0(
+                    offset_data)
+            dual_commit_fut = Future()
+
+            def _send_dual_commit(_):
+                self._client.send(node_id, dual_commit_request).chain(
+                    dual_commit_fut)
+
+            future.add_callback(_send_dual_commit)
+
+            return dual_commit_fut
+        else:
+            return future
+
+    def _offset_commit_request_v0(self, offset_data):
+        return OffsetCommitRequest[0](
+            self.group_id,
+            [(
+                topic, [(
+                    partition,
+                    offset.offset,
+                    offset.metadata
+                ) for partition, offset in six.iteritems(partitions)]
+            ) for topic, partitions in six.iteritems(offset_data)]
+        )
+
+    def _offset_commit_request_v1(self, offset_data):
+        return OffsetCommitRequest[1](
+            self.group_id, -1, '',
+            [(
+                topic, [(
+                    partition,
+                    offset.offset,
+                    -1,
+                    offset.metadata
+                ) for partition, offset in six.iteritems(partitions)]
+            ) for topic, partitions in six.iteritems(offset_data)]
+        )
 
     def _handle_offset_commit_response(self, offsets, future, send_time, response):
         # TODO look at adding request_latency_ms to response (like java kafka)
