@@ -338,6 +338,12 @@ class KafkaConsumer(six.Iterator):
             log.warning('use api_version=%s [tuple] -- "%s" as str is deprecated',
                         str(self.config['api_version']), str_version)
 
+        if (self.config['enable_auto_commit'] and
+            self.config['api_version'] is not None and
+                self.config['api_version'] < (0, 8, 2)):
+            raise KafkaConfigurationError(
+                "Consumer auto commit not supported with api_version < 0.8.2")
+
         self._client = KafkaClient(metrics=self._metrics, **self.config)
 
         # Get auto-discovered version from client if necessary
