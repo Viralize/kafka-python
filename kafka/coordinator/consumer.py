@@ -600,10 +600,8 @@ class ConsumerCoordinator(BaseCoordinator):
         log.debug("Sending offset-commit request with %s for group %s to %s",
                   offsets, self.group_id, node_id)
 
-        future = Future()
-        _f = self._client.send(node_id, request)
-        _f.add_callback(self._handle_offset_commit_response, offsets, future, time.time())
-        _f.add_errback(self._failed_request, node_id, request, future)
+        first_commit_fut = self._client.send(node_id, request)
+        res_fut = Future()
 
         if self.config['dual_commit']:
             if self.config['api_version'] == (0, 8, 1):
@@ -611,20 +609,26 @@ class ConsumerCoordinator(BaseCoordinator):
                 dual_commit_request = self._offset_commit_request_v1(
                     offset_data)
             else:               # api_version >= 0.8.2
-                log.debug("Sending dual-commit to zookeepr-storage")
+                log.debug("Sending dual-commit to zookeeper-storage")
                 dual_commit_request = self._offset_commit_request_v0(
                     offset_data)
-            dual_commit_fut = Future()
 
             def _send_dual_commit(_):
-                self._client.send(node_id, dual_commit_request).chain(
-                    dual_commit_fut)
+                _f = self._client.send(node_id, dual_commit_request)
+                _f.add_errback(self._failed_request, node_id,
+                               request, res_fut)
+                _f.add_callback(self._handle_offset_commit_response,
+                                offsets, res_fut, time.time())
 
-            future.add_callback(_send_dual_commit)
-
-            return dual_commit_fut
+            first_commit_fut.add_errback(self._failed_request, node_id,
+                                         request, res_fut)
+            first_commit_fut.add_callback(_send_dual_commit)
         else:
-            return future
+            first_commit_fut.add_callback(self._handle_offset_commit_response,
+                                          offsets, res_fut, time.time())
+            first_commit_fut.add_errback(self._failed_request, node_id,
+                                         request, res_fut)
+        return res_fut
 
     def _offset_commit_request_v0(self, offset_data):
         return OffsetCommitRequest[0](
