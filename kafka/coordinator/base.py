@@ -249,7 +249,8 @@ class BaseCoordinator(object):
                 # Prior to 0.8.2 there was no group coordinator
                 # so we will just pick a node at random and treat
                 # it as the "coordinator"
-                if self.config['api_version'] < (0, 8, 2):
+                if (self.config['api_version'] < (0, 8, 2) and
+                        not self.config['dual_commit']):
                     self.coordinator_id = self._client.least_loaded_node()
                     if self.coordinator_id is not None:
                         self._client.ready(self.coordinator_id)
